@@ -1,0 +1,36 @@
+name: Refresh Spotify widget
+
+on:
+  schedule:
+    # 毎日 00:00 UTC (= 日本時間 09:00)。GitHub の都合で数分〜十数分ずれることがある。
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}   # Actions 画面から手動実行も可能
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Update widget
+        env:
+          # --- Secrets(機密。リポジトリの Settings → Secrets で登録)---
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          DISCORD_APP_ID: ${{ secrets.DISCORD_APP_ID }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # --- 非機密の表示設定(ここで直接編集してよい)---
+          TIME_RANGE: short_term
+          TRACK_COUNT: "6"
+          WIDGET_TITLE: "Spotify On Repeat"
+          WIDGET_SUBTITLE: "直近4週間で最も聴いた曲 Top6"
+        run: python refresh_widget.py

@@ -1,0 +1,12 @@
+{
+  "spotify_client_id": "SpotifyのClient ID",
+  "spotify_client_secret": "SpotifyのClient Secret",
+  "spotify_refresh_token": "",
+  "discord_app_id": "DiscordアプリのApplication ID",
+  "discord_user_id": "自分のDiscordユーザーID",
+  "discord_bot_token": "DiscordのBotトークン(絶対に共有しない)",
+  "time_range": "short_term",
+  "track_count": 6,
+  "widget_title": "SpotifyRanking",
+  "widget_subtitle": ""
+}

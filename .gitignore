@@ -1,0 +1,6 @@
+# 機密情報。絶対にコミットしないこと。
+config.json
+
+# Python
+__pycache__/
+*.pyc
