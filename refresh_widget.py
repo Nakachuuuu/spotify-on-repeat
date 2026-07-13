@@ -92,6 +92,23 @@ def load_config():
             + ")で指定してください。"
         )
     cfg.setdefault("time_range", "short_term")
+
+    # 日本語表記オーバーライド表。config.json に無ければ overrides.json
+    # (コミット対象・非機密)を読む。環境変数 NAME_OVERRIDES(JSON)が最優先。
+    if "name_overrides" not in cfg:
+        ov_path = CONFIG_PATH.with_name("overrides.json")
+        if ov_path.exists():
+            data = json.loads(ov_path.read_text(encoding="utf-8"))
+            cfg["name_overrides"] = {
+                k: v for k, v in data.items() if not k.startswith("_")
+            }
+    env_ov = os.environ.get("NAME_OVERRIDES")
+    if env_ov:
+        try:
+            cfg["name_overrides"] = json.loads(env_ov)
+        except Exception:
+            pass
+
     return cfg
 
 
@@ -129,7 +146,14 @@ def _pick_square(images):
     return None
 
 
-def get_top_tracks(access_token, time_range, limit=6):
+def _ov(s, overrides):
+    """name_overrides に完全一致すれば置換。英語登録のみの曲/アーティストを
+    日本語表記にするための対応表(例: "The Ocean Waves" -> "海がきこえる")。"""
+    return overrides.get(s, s) if overrides else s
+
+
+def get_top_tracks(access_token, time_range, limit=6, overrides=None):
+    overrides = overrides or {}
     # 同じ曲が別リリースで重複することがあるため、多めに取得してから
     # 重複除去して上位 limit 件に絞る(Spotify の上限は50件)。
     fetch = min(50, max(limit * 4, limit + 10))
@@ -146,11 +170,15 @@ def get_top_tracks(access_token, time_range, limit=6):
     unique = []
     seen = {}  # (曲名, アーティスト) -> unique 内のインデックス
     for it in items:
-        artists = ", ".join(a["name"] for a in it.get("artists", []))
+        # 曲名・各アーティスト名に日本語オーバーライドを適用。
+        artists = ", ".join(
+            _ov(a["name"], overrides) for a in it.get("artists", [])
+        )
+        name = _ov(it.get("name", ""), overrides)
         images = it.get("album", {}).get("images", [])
         largest = images[0]["url"] if images else None
         square = _pick_square(images)
-        key = (it.get("name", ""), artists)
+        key = (name, artists)
         if key in seen:
             # 既出の曲。保持側のジャケットが正方形でなく、
             # この重複側に正方形があれば拝借する(例: 16:9のMVアート→通常ジャケット)。
@@ -160,7 +188,7 @@ def get_top_tracks(access_token, time_range, limit=6):
             continue
         seen[key] = len(unique)
         unique.append(
-            {"name": it.get("name", ""), "artist": artists,
+            {"name": name, "artist": artists,
              "largest": largest, "square": square}
         )
 
@@ -270,7 +298,12 @@ def patch_identity(cfg, payload):
 def main():
     cfg = load_config()
     token = get_spotify_access_token(cfg)
-    tracks = get_top_tracks(token, cfg["time_range"], int(cfg.get("track_count", 6)))
+    tracks = get_top_tracks(
+        token,
+        cfg["time_range"],
+        int(cfg.get("track_count", 6)),
+        overrides=cfg.get("name_overrides"),
+    )
 
     if not tracks:
         print("警告: トップ曲が空でした。再生履歴が少ない可能性があります。")

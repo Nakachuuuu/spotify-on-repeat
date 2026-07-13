@@ -1,0 +1,14 @@
+{
+  "_comment": "英語登録のみの曲/アーティストを日本語表記にする対応表(完全一致で置換)。ISRC一致で裏取りした値。config.json の name_overrides があればそちらが優先。",
+  "Shigeru Nagata": "永田茂",
+  "The Ocean Waves": "海がきこえる",
+  "First Impression": "ファーストインプレッション",
+  "A Seaside Street": "シーサイドストリート",
+  "A Girl's Thoughts": "少女の想い",
+  "Alone Late at Night": "夜更けにひとり",
+  "On a Sunny Day": "ある晴れた日",
+  "A Cheerful Drunk": "陽気なよっぱらい",
+  "A Tree-Lined Boulevard": "風の並木道",
+  "When a Heart Sets Out": "心が旅立つ時",
+  "If I Could Be the Sea": "海になれたら（エンディング）"
+}
