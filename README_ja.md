@@ -126,6 +126,11 @@ GIFのアニメーション可否はDiscordクライアント側の描画仕様�
 
 ## フェーズ7: GPT ImageでジャケットをLive2D風GIFにする
 
+> **現在は一時停止中です。** `.github/workflows/refresh.yml` の
+> `ENABLE_GENERATED_TOP_IMAGE` が `"false"` の間は、画像解析・GIF生成・Pages配信を
+> スキップし、`top_image`には現在1位の元ジャケット静止画を使います。
+> GIF生成を再開する場合は、この値を `"true"` に変更します。
+
 GitHub Actionsでは、Spotifyの実際の1位ジャケットを入力画像として使用します。
 最初にVision対応モデルの`gpt-5.6-luna`が画像を解析し、人物・物体・構図に
 適した動作を最大2個まで選ぶ構造化Motion Planを作成します。伸ばした腕なら

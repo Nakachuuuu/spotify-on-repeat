@@ -23,6 +23,8 @@ concurrency:
 
 env:
   TIME_RANGE: short_term
+  # 一時停止中。false の間はGIF生成・Pages配信を行わず、1位の静止ジャケットを使う。
+  ENABLE_GENERATED_TOP_IMAGE: "false"
   OPENAI_VISION_MODEL: gpt-5.6-luna
   OPENAI_IMAGE_MODEL: gpt-image-2
   OPENAI_IMAGE_QUALITY: medium
@@ -50,6 +52,7 @@ jobs:
 
       - name: Read current top track
         id: metadata
+        if: ${{ env.ENABLE_GENERATED_TOP_IMAGE == 'true' }}
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
@@ -61,6 +64,7 @@ jobs:
 
       - name: Restore generated animation
         id: animation-cache
+        if: ${{ env.ENABLE_GENERATED_TOP_IMAGE == 'true' }}
         uses: actions/cache/restore@v5
         continue-on-error: true
         with:
@@ -72,6 +76,7 @@ jobs:
 
       - name: Generate character-motion GIF
         id: animation
+        if: ${{ env.ENABLE_GENERATED_TOP_IMAGE == 'true' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: >-
@@ -82,7 +87,7 @@ jobs:
           --soft-fail
 
       - name: Save generated animation
-        if: ${{ steps.animation.outputs.available == 'true' && steps.animation-cache.outputs.cache-hit != 'true' }}
+        if: ${{ env.ENABLE_GENERATED_TOP_IMAGE == 'true' && steps.animation.outputs.available == 'true' && steps.animation-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v5
         continue-on-error: true
         with:
@@ -90,7 +95,7 @@ jobs:
           key: ${{ steps.animation-cache.outputs.cache-primary-key }}
 
       - name: Upload Pages artifact
-        if: ${{ steps.animation.outputs.available == 'true' }}
+        if: ${{ env.ENABLE_GENERATED_TOP_IMAGE == 'true' && steps.animation.outputs.available == 'true' }}
         uses: actions/upload-pages-artifact@v5
         with:
           path: _site
@@ -145,7 +150,10 @@ jobs:
           PAGE_URL: ${{ needs.deploy-animation.outputs.page_url }}
           RELATIVE_PATH: ${{ needs.build-animation.outputs.relative_path }}
         run: |
-          if [[ "$DEPLOY_RESULT" == "success" && -n "$PAGE_URL" && -n "$RELATIVE_PATH" ]]; then
+          if [[ "$ENABLE_GENERATED_TOP_IMAGE" != "true" ]]; then
+            echo "url=" >> "$GITHUB_OUTPUT"
+            echo "Generated animation is disabled; using current top-track album art."
+          elif [[ "$DEPLOY_RESULT" == "success" && -n "$PAGE_URL" && -n "$RELATIVE_PATH" ]]; then
             base="${PAGE_URL%/}"
             path="${RELATIVE_PATH#/}"
             url="$base/$path"
@@ -205,6 +213,6 @@ jobs:
           TRACK_COUNT: "6"
           WIDGET_TITLE: "Spotify On Repeat"
           WIDGET_SUBTITLE: "直近4週間で最も聴いた曲 Top6"
-          # 生成・公開に失敗した場合は空になり、1位のアルバムアートへフォールバックする。
+          # 生成停止中または公開失敗時は空になり、1位のアルバムアートへフォールバックする。
           TOP_IMAGE_URL: ${{ steps.image-url.outputs.url }}
         run: python refresh_widget.py
