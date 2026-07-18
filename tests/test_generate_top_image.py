@@ -759,6 +759,7 @@ class GenerateTopImageTests(unittest.TestCase):
             self.assertTrue(generator.is_valid_animated_gif(valid_path))
             metrics = generator._animated_gif_metrics(valid_path)
             self.assertIsNotNone(metrics)
+            self.assertTrue(metrics["visible"])
             self.assertEqual(metrics["validation_size"], 96)
             with Image.open(valid_path) as animation:
                 self.assertTrue(animation.is_animated)

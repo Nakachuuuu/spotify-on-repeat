@@ -43,7 +43,7 @@ DEFAULT_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_IMAGE_QUALITY = "medium"
 MOTION_PLAN_VERSION = "structured-motion-plan-v2"
 PROMPT_VERSION = "motion-plan-articulation-v4"
-RENDER_VERSION = "optical-flow-safe-canvas-v4"
+RENDER_VERSION = "optical-flow-safe-canvas-v5"
 MAX_GIF_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_IMAGE_BYTES = 20 * 1024 * 1024
 MOTION_ANALYSIS_SIZE = 1024
@@ -55,8 +55,8 @@ MIN_VISIBLE_FLOW_PIXELS = 1.5
 MAX_VISIBLE_FLOW_BOOST = 6.0
 SECONDARY_FLOW_TARGET_SCALE = 0.55
 GIF_VALIDATION_SIZE = 96
-MIN_GIF_PEAK_MEAN_DELTA = 0.70
-MIN_GIF_CHANGED_FRACTION = 0.02
+MIN_GIF_PEAK_MEAN_DELTA = 0.35
+MIN_GIF_CHANGED_FRACTION = 0.003
 GIF_CHANGED_PIXEL_THRESHOLD = 6.0
 GIF_PROFILES = (
     (384, 20, 128, 100),
@@ -1370,23 +1370,24 @@ def _animated_gif_metrics(path, max_bytes=MAX_GIF_BYTES):
                     peak_changed_fraction,
                     float(np.mean(pixel_delta >= GIF_CHANGED_PIXEL_THRESHOLD)),
                 )
-            if (
-                peak_mean_delta < MIN_GIF_PEAK_MEAN_DELTA
-                or peak_changed_fraction < MIN_GIF_CHANGED_FRACTION
-            ):
-                return None
+            visible = (
+                peak_mean_delta >= MIN_GIF_PEAK_MEAN_DELTA
+                and peak_changed_fraction >= MIN_GIF_CHANGED_FRACTION
+            )
             return {
                 "frame_count": frame_count,
                 "validation_size": validation_size,
                 "peak_mean_delta": peak_mean_delta,
                 "peak_changed_fraction": peak_changed_fraction,
+                "visible": visible,
             }
     except Exception:
         return None
 
 
 def is_valid_animated_gif(path, max_bytes=MAX_GIF_BYTES):
-    return _animated_gif_metrics(path, max_bytes=max_bytes) is not None
+    metrics = _animated_gif_metrics(path, max_bytes=max_bytes)
+    return bool(metrics and metrics["visible"])
 
 
 def create_looping_gif(
@@ -1430,7 +1431,7 @@ def create_looping_gif(
             gif_metrics = _animated_gif_metrics(
                 temporary_path, max_bytes=max_bytes
             )
-            if gif_metrics is not None:
+            if gif_metrics is not None and gif_metrics["visible"]:
                 temporary_path.replace(output_path)
                 print(
                     f"GIF created: {size}x{size}, "
@@ -1441,6 +1442,14 @@ def create_looping_gif(
                     f"{output_path.stat().st_size} bytes"
                 )
                 return output_path
+            if gif_metrics is not None:
+                print(
+                    f"GIF visibility rejected: {size}x{size}, "
+                    f"{gif_metrics['frame_count']} encoded frames, "
+                    f"peak_delta@{gif_metrics['validation_size']}px="
+                    f"{gif_metrics['peak_mean_delta']:.2f}, "
+                    f"changed={gif_metrics['peak_changed_fraction']:.2%}"
+                )
             temporary_path.unlink(missing_ok=True)
     finally:
         temporary_path.unlink(missing_ok=True)
