@@ -41,7 +41,7 @@ OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits"
 DEFAULT_VISION_MODEL = "gpt-5.6-luna"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_IMAGE_QUALITY = "medium"
-MOTION_PLAN_VERSION = "structured-motion-plan-v1"
+MOTION_PLAN_VERSION = "structured-motion-plan-v2"
 PROMPT_VERSION = "motion-plan-articulation-v3"
 RENDER_VERSION = "optical-flow-safe-canvas-v3"
 MAX_GIF_BYTES = 2 * 1024 * 1024
@@ -125,9 +125,14 @@ MOTION_DIRECTIONS_BY_TYPE = {
     "blink": {"none"},
     "breathing": {"none"},
     "head_tilt": {"left", "right", "upward", "downward"},
-    "hair_sway": {"left", "right", "upward", "downward", "along_existing_pose"},
-    "fabric_sway": {"left", "right", "upward", "downward", "along_existing_pose"},
+    "hair_sway": {
+        "none", "left", "right", "upward", "downward", "along_existing_pose"
+    },
+    "fabric_sway": {
+        "none", "left", "right", "upward", "downward", "along_existing_pose"
+    },
     "arm_reach": {
+        "none",
         "left",
         "right",
         "upward",
@@ -137,9 +142,10 @@ MOTION_DIRECTIONS_BY_TYPE = {
         "along_existing_pose",
         "outward",
     },
-    "arm_bend": {"inward", "outward", "along_existing_pose"},
+    "arm_bend": {"none", "inward", "outward", "along_existing_pose"},
     "hand_articulation": {"none", "inward", "outward", "along_existing_pose"},
     "accessory_sway": {
+        "none",
         "left",
         "right",
         "upward",
@@ -147,6 +153,7 @@ MOTION_DIRECTIONS_BY_TYPE = {
         "along_existing_pose",
     },
     "foreground_element_motion": {
+        "none",
         "left",
         "right",
         "upward",
@@ -240,41 +247,55 @@ MOTION_PLAN_SCHEMA = {
         "motions": {
             "type": "array",
             "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"type": "string", "enum": list(MOTION_TYPES)},
-                    "target": {
-                        "type": "string",
-                        "enum": list(MOTION_TARGETS),
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": list(MOTION_LOCATIONS),
-                    },
-                    "direction": {
-                        "type": "string",
-                        "enum": list(MOTION_DIRECTIONS),
-                    },
-                    "region": {
+                "anyOf": [
+                    {
                         "type": "object",
                         "properties": {
-                            "x": {"type": "integer"},
-                            "y": {"type": "integer"},
-                            "width": {"type": "integer"},
-                            "height": {"type": "integer"},
+                            "type": {"type": "string", "enum": [motion_type]},
+                            "target": {
+                                "type": "string",
+                                "enum": [MOTION_TARGET_BY_TYPE[motion_type]],
+                            },
+                            "location": {
+                                "type": "string",
+                                "enum": (
+                                    ["unspecified"]
+                                    if motion_type == "none"
+                                    else list(MOTION_LOCATIONS)
+                                ),
+                            },
+                            "direction": {
+                                "type": "string",
+                                "enum": [
+                                    direction
+                                    for direction in MOTION_DIRECTIONS
+                                    if direction
+                                    in MOTION_DIRECTIONS_BY_TYPE[motion_type]
+                                ],
+                            },
+                            "region": {
+                                "type": "object",
+                                "properties": {
+                                    "x": {"type": "integer"},
+                                    "y": {"type": "integer"},
+                                    "width": {"type": "integer"},
+                                    "height": {"type": "integer"},
+                                },
+                                "required": ["x", "y", "width", "height"],
+                                "additionalProperties": False,
+                            },
                         },
-                        "required": ["x", "y", "width", "height"],
+                        "required": [
+                            "type",
+                            "target",
+                            "location",
+                            "direction",
+                            "region",
+                        ],
                         "additionalProperties": False,
-                    },
-                },
-                "required": [
-                    "type",
-                    "target",
-                    "location",
-                    "direction",
-                    "region",
-                ],
-                "additionalProperties": False,
+                    }
+                    for motion_type in MOTION_TYPES
+                ]
             },
             "minItems": 1,
             "maxItems": 2,
@@ -506,7 +527,10 @@ def validate_motion_plan(plan):
         if MOTION_TARGET_BY_TYPE[motion_type] != target:
             raise AnimationError("OpenAI returned a mismatched motion target")
         if direction not in MOTION_DIRECTIONS_BY_TYPE[motion_type]:
-            raise AnimationError("OpenAI returned a mismatched motion direction")
+            raise AnimationError(
+                "OpenAI returned a mismatched motion direction "
+                f"({motion_type}/{direction})"
+            )
         if motion_type == "none":
             if (
                 len(motions) != 1

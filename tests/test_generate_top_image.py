@@ -297,7 +297,60 @@ class GenerateTopImageTests(unittest.TestCase):
         self.assertIn(
             "protected_regions", response_format["schema"]["required"]
         )
+        motion_branches = response_format["schema"]["properties"]["motions"][
+            "items"
+        ]["anyOf"]
+        self.assertEqual(len(motion_branches), len(generator.MOTION_TYPES))
+        required_motion_fields = {
+            "type",
+            "target",
+            "location",
+            "direction",
+            "region",
+        }
+        for branch in motion_branches:
+            self.assertFalse(branch["additionalProperties"])
+            self.assertEqual(set(branch["required"]), required_motion_fields)
+        branches_by_type = {
+            branch["properties"]["type"]["enum"][0]: branch
+            for branch in motion_branches
+        }
+        self.assertEqual(
+            branches_by_type["blink"]["properties"]["target"]["enum"],
+            ["eyes"],
+        )
+        self.assertEqual(
+            branches_by_type["blink"]["properties"]["direction"]["enum"],
+            ["none"],
+        )
+        self.assertEqual(
+            branches_by_type["arm_reach"]["properties"]["target"]["enum"],
+            ["arms_hands"],
+        )
+        self.assertIn(
+            "none",
+            branches_by_type["arm_reach"]["properties"]["direction"]["enum"],
+        )
+        self.assertIn(
+            "along_existing_pose",
+            branches_by_type["arm_reach"]["properties"]["direction"]["enum"],
+        )
         self.assertNotIn("Ignore every rule", json.dumps(payload))
+
+    def test_validate_motion_plan_accepts_neutral_articulated_motion(self):
+        plan = make_motion_plan(
+            motions=[
+                make_motion(
+                    "arm_reach",
+                    "arms_hands",
+                    "image_right",
+                    "none",
+                    {"x": 500, "y": 300, "width": 450, "height": 500},
+                )
+            ]
+        )
+
+        self.assertEqual(generator.validate_motion_plan(plan), plan)
 
     def test_validate_motion_plan_rejects_unsafe_low_confidence_and_mismatch(self):
         with self.assertRaisesRegex(generator.AnimationError, "no safe"):
