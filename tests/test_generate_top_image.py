@@ -96,7 +96,7 @@ def make_motion_plan(
                 "arms_hands",
                 "image_right",
                 "along_existing_pose",
-                {"x": 500, "y": 300, "width": 450, "height": 500},
+                {"x": 400, "y": 200, "width": 300, "height": 600},
             ),
             make_motion("blink", "eyes", "image_center", "none"),
         ],
@@ -189,6 +189,9 @@ class GenerateTopImageTests(unittest.TestCase):
         self.assertIn("Secondary follow-through", prompt)
         self.assertIn("gently close the visible eyes", prompt)
         self.assertIn("one rigid layer", prompt)
+        self.assertIn("clearly displaced at the peak", prompt)
+        self.assertIn("one and a half to two percent", prompt)
+        self.assertIn("secondary follow-through at about half", prompt)
         self.assertIn("untrusted visual data", prompt)
         self.assertIn("Keep all text unchanged", prompt)
         self.assertIn("camera must remain completely locked", prompt)
@@ -564,9 +567,29 @@ class GenerateTopImageTests(unittest.TestCase):
 
         flow = generator._character_motion_flow(source_array, aligned)
         magnitude = np.linalg.norm(flow, axis=2)
+        top_count = max(1, magnitude.size // 100)
+        top_motion_mean = float(
+            np.mean(np.partition(magnitude.ravel(), -top_count)[-top_count:])
+        )
+        visible_target = max(
+            generator.MIN_VISIBLE_FLOW_PIXELS,
+            min(magnitude.shape) * generator.VISIBLE_FLOW_TARGET_RATIO,
+        )
 
-        self.assertGreater(float(magnitude.max()), 0.25)
+        self.assertGreaterEqual(top_motion_mean, visible_target * 0.90)
+        self.assertLessEqual(float(magnitude.max()), 12.0 + 1e-5)
         self.assertLess(float(np.mean(magnitude > 0.25)), 0.05)
+
+    def test_motion_statistics_preserve_a_small_coherent_feature(self):
+        magnitude = np.zeros((100, 100), dtype=np.float32)
+        magnitude[10:15, 20:25] = 6.0
+
+        active_fraction, top_motion_mean = generator._motion_statistics(
+            magnitude
+        )
+
+        self.assertAlmostEqual(active_fraction, 0.0025)
+        self.assertEqual(top_motion_mean, 6.0)
 
     def test_detected_text_and_logo_regions_have_zero_motion(self):
         source, keyframe = make_motion_pair()
@@ -617,6 +640,23 @@ class GenerateTopImageTests(unittest.TestCase):
         self.assertTrue(allowed_mask.any())
         self.assertEqual(float(magnitude[~allowed_mask].max()), 0.0)
         self.assertGreater(float(magnitude[allowed_mask].max()), 0.25)
+
+    def test_secondary_motion_cannot_hide_a_static_primary_region(self):
+        source, keyframe = make_motion_pair()
+        source_array = generator._fit_rgb_array(source, 128)
+        keyframe_array = generator._fit_rgb_array(keyframe, 128)
+        aligned = generator._align_keyframe(source_array, keyframe_array)
+        motion_regions = [
+            {"x": 800, "y": 100, "width": 150, "height": 800},
+            {"x": 180, "y": 180, "width": 430, "height": 650},
+        ]
+
+        with self.assertRaisesRegex(generator.AnimationError, "primary motion"):
+            generator._character_motion_flow(
+                source_array,
+                aligned,
+                motion_regions=motion_regions,
+            )
 
     def test_safe_canvas_centers_complete_cover_at_eighty_five_percent(self):
         expected_sizes = {384: 326, 320: 272, 256: 218, 128: 108}
@@ -717,6 +757,9 @@ class GenerateTopImageTests(unittest.TestCase):
             )
 
             self.assertTrue(generator.is_valid_animated_gif(valid_path))
+            metrics = generator._animated_gif_metrics(valid_path)
+            self.assertIsNotNone(metrics)
+            self.assertEqual(metrics["validation_size"], 96)
             with Image.open(valid_path) as animation:
                 self.assertTrue(animation.is_animated)
                 self.assertGreater(animation.n_frames, 1)
@@ -737,13 +780,38 @@ class GenerateTopImageTests(unittest.TestCase):
                     decoded[0][background_mask],
                     decoded[len(decoded) // 2][background_mask],
                 )
-                frame_delta = np.mean(
-                    np.abs(
-                        decoded[0].astype(np.int16)
-                        - decoded[len(decoded) // 2].astype(np.int16)
+                frame_difference = np.abs(
+                    decoded[0].astype(np.int16)
+                    - decoded[len(decoded) // 2].astype(np.int16)
+                )
+                frame_delta = float(np.mean(frame_difference))
+                changed_fraction = float(
+                    np.mean(
+                        np.mean(frame_difference, axis=2)
+                        >= generator.GIF_CHANGED_PIXEL_THRESHOLD
                     )
                 )
-                self.assertGreater(float(frame_delta), 0.0)
+                self.assertTrue(
+                    frame_delta >= generator.MIN_GIF_PEAK_MEAN_DELTA
+                    or changed_fraction >= generator.MIN_GIF_CHANGED_FRACTION
+                )
+
+            imperceptible_path = Path(temp_dir) / "imperceptible.gif"
+            still = Image.new("RGB", (64, 64), (0, 0, 0))
+            one_pixel = still.copy()
+            one_pixel.putpixel((0, 0), (255, 255, 255))
+            still.save(
+                imperceptible_path,
+                format="GIF",
+                save_all=True,
+                append_images=[one_pixel, still],
+                duration=100,
+                loop=0,
+                optimize=False,
+            )
+            self.assertFalse(
+                generator.is_valid_animated_gif(imperceptible_path)
+            )
 
             oversized_path = Path(temp_dir) / "oversized.gif"
             with self.assertRaises(generator.AnimationError):
