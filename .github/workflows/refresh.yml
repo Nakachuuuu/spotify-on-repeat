@@ -1,6 +1,14 @@
 name: Refresh Spotify widget
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/refresh.yml"
+      - "generate_top_image.py"
+      - "refresh_widget.py"
+      - "requirements.txt"
+      - "overrides.json"
   schedule:
     # 毎日 00:00 UTC (= 日本時間 09:00)。GitHub の都合で数分〜十数分ずれることがある。
     - cron: "0 0 * * *"

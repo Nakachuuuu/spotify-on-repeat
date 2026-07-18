@@ -150,6 +150,8 @@ GPT Imageが直接GIFを返すのではなく、生成した静止画にこの�
    - `OPENAI_API_KEY`
 2. **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定
 3. **Actions → Refresh Spotify widget → Run workflow** から手動実行
+生成関連ファイルを `main` にpushした場合も、自動で同じワークフローが実行されます。
+
 
 正常時は `build-animation` → `deploy-animation` → `refresh-widget` の順に成功します。
 画像生成やPages公開に失敗した場合でも、`refresh-widget` は実行され、
