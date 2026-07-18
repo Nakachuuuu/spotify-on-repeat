@@ -31,7 +31,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import requests
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 import refresh_widget
 
@@ -40,9 +40,11 @@ OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_IMAGE_QUALITY = "medium"
 PROMPT_VERSION = "album-character-articulation-v2"
-RENDER_VERSION = "optical-flow-loop-v2"
+RENDER_VERSION = "optical-flow-safe-canvas-v3"
 MAX_GIF_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_IMAGE_BYTES = 20 * 1024 * 1024
+SAFE_CONTENT_SCALE = 0.85
+SAFE_BACKGROUND_BRIGHTNESS = 0.58
 GIF_PROFILES = (
     (384, 20, 96, 100),
     (320, 18, 96, 100),
@@ -217,7 +219,12 @@ def download_source_image(metadata, max_bytes=MAX_SOURCE_IMAGE_BYTES):
         image.load()
     except Exception as exc:
         raise AnimationError("Spotify returned invalid cover image data") from exc
-    return ImageOps.exif_transpose(image).convert("RGB")
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    if image.width != image.height:
+        raise AnimationError(
+            "Spotify cover must be square to animate without cropping"
+        )
+    return image
 
 
 def generate_motion_keyframe(metadata, source_image):
@@ -285,6 +292,46 @@ def _fit_rgb_array(image, size):
         method=Image.Resampling.LANCZOS,
     )
     return np.asarray(fitted, dtype=np.uint8)
+
+
+def _safe_content_size(size):
+    """Return an evenly centered cover size with a crop-safe outer margin."""
+    if size < 8:
+        raise ValueError("Animation canvas must be at least 8 pixels")
+    content_size = int(round(size * SAFE_CONTENT_SCALE))
+    content_size = max(2, min(size - 2, content_size))
+    if (size - content_size) % 2:
+        content_size -= 1
+    return content_size
+
+
+def _safe_canvas_background(source_image, size):
+    """Build a static dark blurred backdrop from the complete album cover."""
+    fitted = ImageOps.fit(
+        source_image.convert("RGB"),
+        (size, size),
+        method=Image.Resampling.LANCZOS,
+    )
+    blurred = fitted.filter(
+        ImageFilter.GaussianBlur(radius=max(4.0, size * 0.055))
+    )
+    background = np.asarray(blurred, dtype=np.float32)
+    return np.clip(
+        background * SAFE_BACKGROUND_BRIGHTNESS, 0, 255
+    ).astype(np.uint8)
+
+
+def _composite_safe_canvas(background, content):
+    """Center the full cover motion frame over its static safe-area backdrop."""
+    canvas = background.copy()
+    height, width = canvas.shape[:2]
+    content_height, content_width = content.shape[:2]
+    if content_height > height or content_width > width:
+        raise ValueError("Cover content does not fit inside the animation canvas")
+    top = (height - content_height) // 2
+    left = (width - content_width) // 2
+    canvas[top : top + content_height, left : left + content_width] = content
+    return canvas
 
 
 def _align_keyframe(source, keyframe):
@@ -422,22 +469,29 @@ def _character_motion_flow(source, keyframe, max_motion=12.0):
 
 
 def _animation_frames(source_image, keyframe_image, size, frame_count, colors):
-    source = _fit_rgb_array(source_image, size)
-    keyframe = _fit_rgb_array(keyframe_image, size)
+    content_size = _safe_content_size(size)
+    source = _fit_rgb_array(source_image, content_size)
+    keyframe = _fit_rgb_array(keyframe_image, content_size)
     keyframe = _align_keyframe(source, keyframe)
     flow = _character_motion_flow(
         source,
         keyframe,
-        max_motion=max(5.0, size * 0.035),
+        max_motion=max(5.0, content_size * 0.035),
     )
 
-    palette_seed = Image.fromarray(source).quantize(
+    background = _safe_canvas_background(source_image, size)
+    palette_source = _composite_safe_canvas(background, source)
+    palette_seed = Image.fromarray(palette_source).quantize(
         colors=colors,
         method=Image.Quantize.MEDIANCUT,
     )
     grid_x, grid_y = np.meshgrid(
-        np.arange(size, dtype=np.float32),
-        np.arange(size, dtype=np.float32),
+        np.arange(content_size, dtype=np.float32),
+        np.arange(content_size, dtype=np.float32),
+    )
+    print(
+        f"Safe canvas: cover={content_size}x{content_size} "
+        f"inside {size}x{size} ({content_size / size:.0%})"
     )
 
     frames = []
@@ -446,16 +500,17 @@ def _animation_frames(source_image, keyframe_image, size, frame_count, colors):
         amount = 0.5 - 0.5 * math.cos(phase)
         map_x = grid_x - flow[..., 0] * amount
         map_y = grid_y - flow[..., 1] * amount
-        frame_array = cv2.remap(
+        motion_frame = cv2.remap(
             source,
             map_x.astype(np.float32),
             map_y.astype(np.float32),
             interpolation=cv2.INTER_CUBIC,
             borderMode=cv2.BORDER_REFLECT_101,
         )
+        frame_array = _composite_safe_canvas(background, motion_frame)
         frame = Image.fromarray(frame_array)
         frames.append(
-            frame.quantize(palette=palette_seed, dither=Image.Dither.FLOYDSTEINBERG)
+            frame.quantize(palette=palette_seed, dither=Image.Dither.NONE)
         )
     return frames
 
@@ -506,7 +561,9 @@ def create_looping_gif(
                 duration=duration_ms,
                 loop=0,
                 optimize=True,
-                disposal=2,
+                # Frame 0 initializes the opaque canvas. Retaining each frame lets
+                # Pillow encode only the moving center instead of the static backdrop.
+                disposal=1,
             )
             if is_valid_animated_gif(temporary_path, max_bytes=max_bytes):
                 temporary_path.replace(output_path)

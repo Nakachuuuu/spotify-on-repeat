@@ -136,6 +136,20 @@ class GenerateTopImageTests(unittest.TestCase):
         self.assertEqual(image.size, (48, 48))
         get.assert_called_once_with("https://i.scdn.co/image/example", timeout=30)
 
+    def test_download_source_image_rejects_non_square_cover(self):
+        cover = Image.new("RGB", (64, 48), (20, 40, 80))
+        response = Mock(
+            status_code=200,
+            headers={"Content-Type": "image/png"},
+            content=image_bytes(cover),
+        )
+
+        with patch.object(generator.requests, "get", return_value=response):
+            with self.assertRaisesRegex(generator.AnimationError, "square"):
+                generator.download_source_image(
+                    {"source_image_url": "https://i.scdn.co/image/non-square"}
+                )
+
     def test_download_source_image_rejects_non_image_response(self):
         response = Mock(
             status_code=200,
@@ -208,12 +222,49 @@ class GenerateTopImageTests(unittest.TestCase):
         self.assertGreater(float(magnitude.max()), 0.25)
         self.assertLess(float(np.mean(magnitude > 0.25)), 0.05)
 
+    def test_safe_canvas_centers_complete_cover_at_eighty_five_percent(self):
+        expected_sizes = {384: 326, 320: 272, 256: 218, 128: 108}
+        for canvas_size, content_size in expected_sizes.items():
+            with self.subTest(canvas_size=canvas_size):
+                self.assertEqual(
+                    generator._safe_content_size(canvas_size), content_size
+                )
+
+        source = make_pattern(128)
+        content_size = generator._safe_content_size(128)
+        content = generator._fit_rgb_array(source, content_size)
+        background = generator._safe_canvas_background(source, 128)
+        canvas = generator._composite_safe_canvas(background, content)
+        margin = (128 - content_size) // 2
+
+        self.assertEqual(canvas.shape, (128, 128, 3))
+        np.testing.assert_array_equal(
+            canvas[margin : margin + content_size, margin : margin + content_size],
+            content,
+        )
+        np.testing.assert_array_equal(canvas[:margin], background[:margin])
+        self.assertLess(
+            float(background.mean()),
+            float(generator._fit_rgb_array(source, 128).mean()),
+        )
+
     def test_animation_moves_toward_keyframe_and_has_a_smooth_loop_seam(self):
         source, keyframe = make_motion_pair()
         frames = generator._animation_frames(source, keyframe, 128, 8, 128)
         arrays = [
             np.asarray(frame.convert("RGB"), dtype=np.float32) for frame in frames
         ]
+        content_size = generator._safe_content_size(128)
+        safe_margin = (128 - content_size) // 2
+        background_mask = np.ones((128, 128), dtype=bool)
+        background_mask[
+            safe_margin : safe_margin + content_size,
+            safe_margin : safe_margin + content_size,
+        ] = False
+        np.testing.assert_array_equal(
+            arrays[0][background_mask],
+            arrays[len(arrays) // 2][background_mask],
+        )
 
         def red_centroid(frame):
             mask = (
@@ -275,6 +326,28 @@ class GenerateTopImageTests(unittest.TestCase):
                 self.assertGreater(animation.n_frames, 1)
                 self.assertEqual(animation.size, (96, 96))
                 self.assertEqual(animation.info.get("loop"), 0)
+                decoded = []
+                for frame_index in range(animation.n_frames):
+                    animation.seek(frame_index)
+                    decoded.append(np.asarray(animation.convert("RGB")).copy())
+                content_size = generator._safe_content_size(96)
+                safe_margin = (96 - content_size) // 2
+                background_mask = np.ones((96, 96), dtype=bool)
+                background_mask[
+                    safe_margin : safe_margin + content_size,
+                    safe_margin : safe_margin + content_size,
+                ] = False
+                np.testing.assert_array_equal(
+                    decoded[0][background_mask],
+                    decoded[len(decoded) // 2][background_mask],
+                )
+                frame_delta = np.mean(
+                    np.abs(
+                        decoded[0].astype(np.int16)
+                        - decoded[len(decoded) // 2].astype(np.int16)
+                    )
+                )
+                self.assertGreater(float(frame_delta), 0.0)
 
             oversized_path = Path(temp_dir) / "oversized.gif"
             with self.assertRaises(generator.AnimationError):
@@ -284,6 +357,34 @@ class GenerateTopImageTests(unittest.TestCase):
                 )
             self.assertFalse(oversized_path.exists())
             self.assertFalse((Path(temp_dir) / ".oversized.gif.tmp").exists())
+
+    def test_create_looping_gif_falls_back_to_a_smaller_profile(self):
+        source, keyframe = make_motion_pair()
+        large_profile = ((128, 8, 64, 50),)
+        small_profile = ((64, 8, 32, 50),)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            large_path = root / "large.gif"
+            small_path = root / "small.gif"
+            generator.create_looping_gif(
+                source, keyframe, large_path, profiles=large_profile
+            )
+            generator.create_looping_gif(
+                source, keyframe, small_path, profiles=small_profile
+            )
+            self.assertGreater(large_path.stat().st_size, small_path.stat().st_size)
+            max_bytes = (large_path.stat().st_size + small_path.stat().st_size) // 2
+
+            output_path = root / "fallback.gif"
+            generator.create_looping_gif(
+                source, keyframe, output_path,
+                profiles=large_profile + small_profile,
+                max_bytes=max_bytes,
+            )
+
+            self.assertLessEqual(output_path.stat().st_size, max_bytes)
+            with Image.open(output_path) as animation:
+                self.assertEqual(animation.size, (64, 64))
 
     def test_render_animation_reuses_cache_and_builds_unique_site(self):
         metadata = generator.build_metadata(
