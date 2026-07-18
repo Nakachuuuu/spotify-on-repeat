@@ -118,25 +118,35 @@ GIFのアニメーション可否はDiscordクライアント側の描画仕様�
    python refresh_widget.py
    ```
    初回の成功で Identity の発行も兼ねます(記事のPowerShell/curl手順の代わり)。
-   `OK: widget updated` と出れば成功。
+   `OK: widget update accepted` と出ればDiscordに更新が受理されています。
 
 3. **定期実行(任意)**
    - Windows: タスクスケジューラで1日1回 `refresh_widget.py` を実行
    - Mac/Linux: cron 例 → `0 9 * * * cd /path/to/project && python3 refresh_widget.py`
 
-## フェーズ7: GPT Imageでトップ画像を自動生成する
+## フェーズ7: GPT ImageでジャケットをLive2D風GIFにする
 
-GitHub Actions では、現在の1位の曲をもとに `gpt-image-2` で正方形の
-オリジナル画像を生成し、Pillowで緩やかなパン・ズームのループGIFへ変換します。
-GPT Imageが直接GIFを返すのではなく、生成した静止画にこのリポジトリ側で動きを付ける構成です。
+GitHub Actionsでは、Spotifyの実際の1位ジャケットを入力画像として使用します。
+`gpt-image-2`には、人物のまばたき・髪・服・腕などが少し動いた
+「別の1キーフレーム」だけを作らせます。その差分からOpenCVで局所的な
+動きベクトルを推定し、元ジャケットの画素を変形して往復ループGIFにします。
+パン・ズームで画像全体を動かす方式ではありません。
+
+これはPSDレイヤーと手作業のリグを使う本物のLive2Dではなく、1枚絵からの
+自動推定です。ジャケットの構図によって動きの精度は変わりますが、
+生成キーフレームを直接表示せず元画像の画素を動かすため、文字・背景・絵柄の
+変化を抑えられます。
+全体の平行移動・拡大縮小・回転や、大半の描き直しを検出した場合は採用せず、
+静止ジャケットへフォールバックします。
 
 自動更新は次の順序で行われます。
 
-1. Spotifyから現在の1位の曲名・アーティストを取得
-2. 同じ曲の生成済みGIFがActionsキャッシュにあれば再利用
-3. 未生成ならOpenAI Image APIで画像を生成し、8 MiB以下のGIFへ変換
-4. GIFをGitHub Pagesへデプロイ
-5. 公開URLを `top_image` に設定してDiscord Identityを更新
+1. Spotifyから現在の1位と正方形ジャケットを取得
+2. 同じ曲・ジャケットのGIFがActionsキャッシュにあれば再利用
+3. 未生成ならGPT Imageで小さな人物動作のキーフレームを1枚生成
+4. 光学フローから元ジャケットを変形し、2 MiB以下のループGIFへ変換
+5. Actions実行ごとの固有ファイル名でGitHub Pagesへデプロイ
+6. 公開GIFがHTTP 200・`image/gif`になるまで確認してからDiscordを更新
 
 初回だけ、GitHubリポジトリで次を設定してください。
 
@@ -152,15 +162,15 @@ GPT Imageが直接GIFを返すのではなく、生成した静止画にこの�
 3. **Actions → Refresh Spotify widget → Run workflow** から手動実行
 生成関連ファイルを `main` にpushした場合も、自動で同じワークフローが実行されます。
 
-
 正常時は `build-animation` → `deploy-animation` → `refresh-widget` の順に成功します。
-画像生成やPages公開に失敗した場合でも、`refresh-widget` は実行され、
-`top_image` には1位のアルバムアートがフォールバックとして使われます。
+キーフレーム生成、動き抽出、またはPages公開に失敗した場合でも
+`refresh-widget`は実行され、`top_image`には1位の静止ジャケットが使われます。
 
 モデルと品質は `.github/workflows/refresh.yml` の
 `OPENAI_IMAGE_MODEL` / `OPENAI_IMAGE_QUALITY` で変更できます。
-曲・モデル・品質・生成バージョンが同じ間はキャッシュを使うため、
-通常は毎日OpenAI APIを呼びません。生成画像と曲名・アーティストはGitHub Pages上で公開されます。
+既定品質は`medium`です。曲・ジャケット・モデル・品質・生成バージョンが
+同じ間はキャッシュを使うため、通常は毎日OpenAI APIを呼びません。
+GIFと曲名・アーティストはGitHub Pages上で公開されます。
 
 ## フェーズ8: プロフィールに表示
 

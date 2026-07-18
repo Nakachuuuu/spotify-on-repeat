@@ -83,5 +83,72 @@ class RefreshWidgetTests(unittest.TestCase):
         )
 
 
+    def test_top_image_unfurl_status_requires_complete_media_metadata(self):
+        url = "https://example.test/generated.gif"
+        response_data = {
+            "data": {
+                "dynamic": [
+                    {
+                        "type": 3,
+                        "name": "top_image",
+                        "value": {
+                            "url": url,
+                            "proxy_url": "https://proxy.example/image.gif",
+                            "width": 384,
+                            "height": 384,
+                            "content_type": "image/gif",
+                            "loading_state": 2,
+                        },
+                    }
+                ]
+            }
+        }
+
+        status = refresh_widget.top_image_unfurl_status(
+            response_data, expected_url=url
+        )
+
+        self.assertTrue(status["present"])
+        self.assertTrue(status["ready"])
+        self.assertTrue(status["source_matches"])
+        self.assertTrue(status["has_proxy"])
+
+    def test_top_image_unfurl_status_rejects_failed_placeholder(self):
+        response_data = {
+            "data": {
+                "dynamic": [
+                    {
+                        "type": 3,
+                        "name": "top_image",
+                        "value": {
+                            "url": "https://example.test/generated.gif",
+                            "proxy_url": "https://proxy.example/image.gif",
+                            "width": None,
+                            "height": None,
+                            "content_type": None,
+                            "loading_state": 3,
+                        },
+                    }
+                ]
+            }
+        }
+
+        status = refresh_widget.top_image_unfurl_status(response_data)
+
+        self.assertTrue(status["present"])
+        self.assertFalse(status["ready"])
+        self.assertEqual(status["loading_state"], 3)
+        self.assertTrue(status["has_proxy"])
+
+    def test_log_top_image_unfurl_handles_empty_patch_response(self):
+        response = Mock()
+        response.json.side_effect = ValueError("no json")
+
+        with patch("builtins.print") as print_mock:
+            status = refresh_widget.log_top_image_unfurl(response)
+
+        self.assertIsNone(status)
+        self.assertIn("without media metadata", print_mock.call_args.args[0])
+
 if __name__ == "__main__":
     unittest.main()

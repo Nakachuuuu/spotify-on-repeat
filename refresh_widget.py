@@ -5,7 +5,7 @@ Spotify のトップ曲を取得して Discord ウィジェットの identity �
 使い方:
     python refresh_widget.py
 
-初回実行時に identity の発行も兼ねる。成功すると "OK: widget updated" と出る。
+初回実行時に identity の発行も兼ねる。成功すると "OK: widget update accepted" と出る。
 config.json の time_range で集計期間を切り替え可能:
     short_term  = 約4週間
     medium_term = 約6ヶ月
@@ -262,6 +262,86 @@ def build_payload(cfg, tracks):
     }
 
 
+def _find_dynamic_field(value, field_name):
+    """Find one Discord dynamic field without assuming a response wrapper."""
+    if isinstance(value, dict):
+        if value.get("name") == field_name and "value" in value:
+            return value
+        for nested in value.values():
+            found = _find_dynamic_field(nested, field_name)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for nested in value:
+            found = _find_dynamic_field(nested, field_name)
+            if found is not None:
+                return found
+    return None
+
+
+def top_image_unfurl_status(response_data, expected_url=None):
+    """Return a privacy-safe summary of Discord media processing metadata."""
+    field = _find_dynamic_field(response_data, "top_image")
+    if not field:
+        return {"present": False, "ready": False}
+    value = field.get("value")
+    if not isinstance(value, dict):
+        return {"present": True, "ready": False}
+
+    width = value.get("width")
+    height = value.get("height")
+    content_type = str(value.get("content_type") or "")
+    source_matches = not expected_url or value.get("url") == expected_url
+    ready = (
+        source_matches
+        and value.get("loading_state") == 2
+        and isinstance(width, int)
+        and width > 0
+        and isinstance(height, int)
+        and height > 0
+        and content_type.startswith("image/")
+        and bool(value.get("proxy_url"))
+    )
+    return {
+        "present": True,
+        "ready": ready,
+        "source_matches": source_matches,
+        "loading_state": value.get("loading_state"),
+        "width": width,
+        "height": height,
+        "content_type": content_type or None,
+        "has_proxy": bool(value.get("proxy_url")),
+    }
+
+
+def log_top_image_unfurl(resp, expected_url=None):
+    """Report media metadata when the experimental endpoint returns it."""
+    try:
+        response_data = resp.json()
+    except Exception:
+        print("INFO: Discord accepted the update without media metadata.")
+        return None
+
+    status = top_image_unfurl_status(response_data, expected_url=expected_url)
+    if status["ready"]:
+        print(
+            "OK: top_image unfurled "
+            f"({status['width']}x{status['height']}, {status['content_type']})"
+        )
+    elif status["present"]:
+        print(
+            "INFO: top_image was accepted; Discord media processing is not yet "
+            "confirmed "
+            f"(state={status.get('loading_state')}, "
+            f"size={status.get('width')}x{status.get('height')}, "
+            f"type={status.get('content_type')}, "
+            f"proxy={status.get('has_proxy')})."
+        )
+    else:
+        print("INFO: Discord response did not include top_image media metadata.")
+    return status
+
+
 def patch_identity(cfg, payload):
     url = DISCORD_IDENTITY_URL.format(
         app_id=cfg["discord_app_id"], user_id=cfg["discord_user_id"]
@@ -318,8 +398,11 @@ def main():
             print(f"  {i}. {t['name']} — {t['artist']}")
 
     payload = build_payload(cfg, tracks)
-    patch_identity(cfg, payload)
-    print("OK: widget updated")
+    top_image_field = _find_dynamic_field(payload, "top_image")
+    expected_url = (top_image_field or {}).get("value", {}).get("url")
+    response = patch_identity(cfg, payload)
+    log_top_image_unfurl(response, expected_url=expected_url)
+    print("OK: widget update accepted")
 
 
 if __name__ == "__main__":

@@ -24,14 +24,14 @@ concurrency:
 env:
   TIME_RANGE: short_term
   OPENAI_IMAGE_MODEL: gpt-image-2
-  OPENAI_IMAGE_QUALITY: low
+  OPENAI_IMAGE_QUALITY: medium
 
 jobs:
   build-animation:
     runs-on: ubuntu-latest
     outputs:
       animation_available: ${{ steps.animation.outputs.available }}
-      relative_path: ${{ steps.metadata.outputs.relative_path }}
+      relative_path: ${{ steps.animation.outputs.relative_path }}
     steps:
       - uses: actions/checkout@v6
 
@@ -53,7 +53,10 @@ jobs:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
-        run: python generate_top_image.py metadata --output .animation/metadata.json
+        run: >-
+          python generate_top_image.py metadata
+          --output .animation/metadata.json
+          --publication-id ${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Restore generated animation
         id: animation-cache
@@ -66,7 +69,7 @@ jobs:
             ${{ steps.metadata.outputs.asset_key }}-
             ${{ hashFiles('generate_top_image.py', 'requirements.txt') }}
 
-      - name: Generate looping GIF
+      - name: Generate character-motion GIF
         id: animation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -135,6 +138,7 @@ jobs:
       - name: Select top image URL
         id: image-url
         shell: bash
+        timeout-minutes: 12
         env:
           DEPLOY_RESULT: ${{ needs.deploy-animation.result }}
           PAGE_URL: ${{ needs.deploy-animation.outputs.page_url }}
@@ -143,7 +147,45 @@ jobs:
           if [[ "$DEPLOY_RESULT" == "success" && -n "$PAGE_URL" && -n "$RELATIVE_PATH" ]]; then
             base="${PAGE_URL%/}"
             path="${RELATIVE_PATH#/}"
-            printf 'url=%s/%s\n' "$base" "$path" >> "$GITHUB_OUTPUT"
+            url="$base/$path"
+            download="$RUNNER_TEMP/top-image.gif"
+            ready=false
+
+            for attempt in $(seq 1 60); do
+              response="$(
+                curl \
+                  --location \
+                  --silent \
+                  --show-error \
+                  --connect-timeout 3 \
+                  --max-time 5 \
+                  --output "$download" \
+                  --write-out $'%{http_code}\t%{content_type}' \
+                  "$url"
+              )" || response=""
+              IFS=$'\t' read -r status content_type <<< "$response" || true
+              content_type="${content_type,,}"
+              signature="$(head -c 6 "$download" 2>/dev/null || true)"
+
+              if [[ "$status" == "200" && "$content_type" == image/gif* ]] &&
+                 [[ "$signature" == "GIF87a" || "$signature" == "GIF89a" ]]; then
+                ready=true
+                echo "Pages GIF ready after attempt $attempt: $url"
+                break
+              fi
+
+              echo "Waiting for Pages: attempt=$attempt status=${status:-unavailable} type=${content_type:-unknown}"
+              if (( attempt < 60 )); then
+                sleep 5
+              fi
+            done
+
+            if [[ "$ready" == "true" ]]; then
+              printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Generated GIF did not become ready; using album art."
+              echo "url=" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "url=" >> "$GITHUB_OUTPUT"
             echo "Generated animation unavailable; using album art."
