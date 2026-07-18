@@ -61,6 +61,7 @@ ENV_KEYS = {
     "track_count": "TRACK_COUNT",
     "widget_title": "WIDGET_TITLE",
     "widget_subtitle": "WIDGET_SUBTITLE",
+    "top_image_url": "TOP_IMAGE_URL",
 }
 
 
@@ -188,7 +189,7 @@ def get_top_tracks(access_token, time_range, limit=6, overrides=None):
             continue
         seen[key] = len(unique)
         unique.append(
-            {"name": name, "artist": artists,
+            {"id": it.get("id"), "name": name, "artist": artists,
              "largest": largest, "square": square}
         )
 
@@ -196,7 +197,7 @@ def get_top_tracks(access_token, time_range, limit=6, overrides=None):
     for t in unique[:limit]:
         # 正方形ジャケットを優先。無ければ最大画像。
         tracks.append(
-            {"name": t["name"], "artist": t["artist"],
+            {"id": t["id"], "name": t["name"], "artist": t["artist"],
              "art": t["square"] or t["largest"]}
         )
     return tracks
@@ -210,7 +211,7 @@ def build_payload(cfg, tracks):
     type: 1 = テキスト, 3 = 画像。
 
     ウィジェットのフィールド構成:
-      top_image                … ヘッダー画像(=1位のアルバムアート)
+      top_image                … ヘッダー画像(config: top_image_url、未指定時は1位のアート)
       top_title                … ヘッダーのタイトル(config: widget_title)
       top_subtitle1            … ヘッダーのサブタイトル(config: widget_subtitle)
       value1〜value6           … 各順位の曲名
@@ -237,8 +238,12 @@ def build_payload(cfg, tracks):
     )
     add_text("top_title", title)
     add_text("top_subtitle1", subtitle)
-    if tracks and tracks[0]["art"]:
-        add_image("top_image", tracks[0]["art"])
+    top_image_url = str(cfg.get("top_image_url") or "").strip()
+    if not top_image_url and tracks:
+        top_image_url = str(tracks[0].get("art") or "").strip()
+
+    if top_image_url:
+        add_image("top_image", top_image_url)
 
     # --- 各順位: value=曲名, label=アーティスト, icon=アルバムアート ---
     # 曲が足りない場合はダッシュで埋める。

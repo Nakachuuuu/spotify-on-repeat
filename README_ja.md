@@ -35,18 +35,17 @@ Widget ページ → Create Widget でエディタを開き、以下を作成し
 
 | 用途 | Value Type | Data Field(キー名) |
 |---|---|---|
-| 1位の曲のアルバムアート | User Data (Image) | `top_art` |
-| 1位の曲名 | User Data (Text) | `track1` |
-| 1位のアーティスト | User Data (Text) | `artist1` |
-| 2位の曲名 | User Data (Text) | `track2` |
-| 2位のアーティスト | User Data (Text) | `artist2` |
-| 3位の曲名 | User Data (Text) | `track3` |
-| 3位のアーティスト | User Data (Text) | `artist3` |
+| ヘッダー画像 | User Data (Image) | `top_image` |
+| ヘッダーのタイトル | User Data (Text) | `top_title` |
+| ヘッダーのサブタイトル | User Data (Text) | `top_subtitle1` |
+| 1〜6位の曲名 | User Data (Text) | `value1`〜`value6` |
+| 1〜6位のアーティスト | User Data (Text) | `label1`〜`label6` |
+| 1〜6位のアルバムアート | User Data (Image) | `icon1`〜`icon6` |
 
 レイアウト例:
-- **Widget Top**: タイトルを Custom String で「Top Tracks (4 weeks)」、画像を `top_art`
-- **Widget Bottom**: 6統計グリッドを選び、上段に track1〜3、下段に artist1〜3
-  (または「4 stats + 画像」デザインでもOK。その場合は使うキーだけ設定)
+- **Widget Top**: タイトルを `top_title`、サブタイトルを `top_subtitle1`、画像を `top_image`
+- **Widget Bottom**: 6統計グリッドを選び、各順位の曲名を `value1`〜`value6`、
+  アーティストを `label1`〜`label6`、画像を `icon1`〜`icon6` に設定
 
 各 User Data フィールドには **fallback**(データ未送信時の表示)を
 Custom String で設定しておくと安全です(例: `Loading...`)。
@@ -82,7 +81,7 @@ GitHub等に上げる場合も必ず環境変数や .gitignore 済みファイ�
 ## フェーズ6: スクリプトの設定と実行
 
 ```bash
-pip install requests
+pip install -r requirements.txt
 ```
 
 `config.json` を作成(config.example.json をコピーして値を埋める):
@@ -95,9 +94,17 @@ pip install requests
   "discord_app_id": "アプリのApplication ID",
   "discord_user_id": "自分のユーザーID(Discordで自分を右クリック→IDをコピー)",
   "discord_bot_token": "...",
-  "time_range": "short_term"
+  "time_range": "short_term",
+  "track_count": 6,
+  "widget_title": "Spotify On Repeat",
+  "widget_subtitle": "直近4週間で最も聴いた曲 Top6",
+  "top_image_url": ""
 }
 ```
+
+`top_image_url` に公開画像URLを指定すると、1位のアルバムアートより優先して `top_image` に送信します。
+空文字の場合は従来どおり1位のアルバムアートを使います。
+GIFのアニメーション可否はDiscordクライアント側の描画仕様に依存します。
 
 1. **Spotifyのリフレッシュトークン取得(初回のみ)**
    ```bash
@@ -117,7 +124,43 @@ pip install requests
    - Windows: タスクスケジューラで1日1回 `refresh_widget.py` を実行
    - Mac/Linux: cron 例 → `0 9 * * * cd /path/to/project && python3 refresh_widget.py`
 
-## フェーズ7: プロフィールに表示
+## フェーズ7: GPT Imageでトップ画像を自動生成する
+
+GitHub Actions では、現在の1位の曲をもとに `gpt-image-2` で正方形の
+オリジナル画像を生成し、Pillowで緩やかなパン・ズームのループGIFへ変換します。
+GPT Imageが直接GIFを返すのではなく、生成した静止画にこのリポジトリ側で動きを付ける構成です。
+
+自動更新は次の順序で行われます。
+
+1. Spotifyから現在の1位の曲名・アーティストを取得
+2. 同じ曲の生成済みGIFがActionsキャッシュにあれば再利用
+3. 未生成ならOpenAI Image APIで画像を生成し、8 MiB以下のGIFへ変換
+4. GIFをGitHub Pagesへデプロイ
+5. 公開URLを `top_image` に設定してDiscord Identityを更新
+
+初回だけ、GitHubリポジトリで次を設定してください。
+
+1. **Settings → Secrets and variables → Actions** のRepository secretsに以下を登録
+   - `SPOTIFY_CLIENT_ID`
+   - `SPOTIFY_CLIENT_SECRET`
+   - `SPOTIFY_REFRESH_TOKEN`
+   - `DISCORD_APP_ID`
+   - `DISCORD_USER_ID`
+   - `DISCORD_BOT_TOKEN`
+   - `OPENAI_API_KEY`
+2. **Settings → Pages → Build and deployment → Source** を **GitHub Actions** に設定
+3. **Actions → Refresh Spotify widget → Run workflow** から手動実行
+
+正常時は `build-animation` → `deploy-animation` → `refresh-widget` の順に成功します。
+画像生成やPages公開に失敗した場合でも、`refresh-widget` は実行され、
+`top_image` には1位のアルバムアートがフォールバックとして使われます。
+
+モデルと品質は `.github/workflows/refresh.yml` の
+`OPENAI_IMAGE_MODEL` / `OPENAI_IMAGE_QUALITY` で変更できます。
+曲・モデル・品質・生成バージョンが同じ間はキャッシュを使うため、
+通常は毎日OpenAI APIを呼びません。生成画像と曲名・アーティストはGitHub Pages上で公開されます。
+
+## フェーズ8: プロフィールに表示
 
 この操作はまだ通常UIにないため、Discord Previews サーバーの該当スレッドにある
 スニペットをブラウザ/クライアントの開発者ツールで実行して、
@@ -136,4 +179,4 @@ pip install requests
 - PATCH が 403/404 → Application ID / User ID の取り違えが多いです。
 - Spotify が 401 → リフレッシュトークンを取り直してください。
 - ウィジェットに反映されない → エディタの Data Field 名とスクリプトの
-  キー名(track1 等)が完全一致しているか、Publish 済みかを確認。
+  キー名(`top_image`、`value1` 等)が完全一致しているか、Publish 済みかを確認。

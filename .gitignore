@@ -4,3 +4,9 @@ config.json
 # Python
 __pycache__/
 *.pyc
+
+# Generated animation and local test dependencies
+.animation/
+.animation-cache/
+_site/
+.runtime-deps/

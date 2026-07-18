@@ -6,18 +6,140 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch: {}   # Actions 画面から手動実行も可能
 
-jobs:
-  refresh:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+permissions:
+  contents: read
 
-      - uses: actions/setup-python@v5
+concurrency:
+  group: spotify-widget-pages
+  cancel-in-progress: false
+
+env:
+  TIME_RANGE: short_term
+  OPENAI_IMAGE_MODEL: gpt-image-2
+  OPENAI_IMAGE_QUALITY: low
+
+jobs:
+  build-animation:
+    runs-on: ubuntu-latest
+    outputs:
+      animation_available: ${{ steps.animation.outputs.available }}
+      relative_path: ${{ steps.metadata.outputs.relative_path }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+
+      - name: Read current top track
+        id: metadata
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+        run: python generate_top_image.py metadata --output .animation/metadata.json
+
+      - name: Restore generated animation
+        id: animation-cache
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        with:
+          path: .animation-cache
+          key: >-
+            spotify-animation-${{ runner.os }}-
+            ${{ steps.metadata.outputs.asset_key }}-
+            ${{ hashFiles('generate_top_image.py', 'requirements.txt') }}
+
+      - name: Generate looping GIF
+        id: animation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: >-
+          python generate_top_image.py render
+          --metadata .animation/metadata.json
+          --cache-dir .animation-cache
+          --site-dir _site
+          --soft-fail
+
+      - name: Save generated animation
+        if: ${{ steps.animation.outputs.available == 'true' && steps.animation-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: .animation-cache
+          key: ${{ steps.animation-cache.outputs.cache-primary-key }}
+
+      - name: Upload Pages artifact
+        if: ${{ steps.animation.outputs.available == 'true' }}
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+          include-hidden-files: true
+
+  deploy-animation:
+    needs: build-animation
+    if: >-
+      ${{
+        needs.build-animation.outputs.animation_available == 'true' &&
+        github.ref_name == github.event.repository.default_branch
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Deploy generated animation
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  refresh-widget:
+    needs: [build-animation, deploy-animation]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Select top image URL
+        id: image-url
+        shell: bash
+        env:
+          DEPLOY_RESULT: ${{ needs.deploy-animation.result }}
+          PAGE_URL: ${{ needs.deploy-animation.outputs.page_url }}
+          RELATIVE_PATH: ${{ needs.build-animation.outputs.relative_path }}
+        run: |
+          if [[ "$DEPLOY_RESULT" == "success" && -n "$PAGE_URL" && -n "$RELATIVE_PATH" ]]; then
+            base="${PAGE_URL%/}"
+            path="${RELATIVE_PATH#/}"
+            printf 'url=%s/%s\n' "$base" "$path" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=" >> "$GITHUB_OUTPUT"
+            echo "Generated animation unavailable; using album art."
+          fi
 
       - name: Update widget
         env:
@@ -29,8 +151,9 @@ jobs:
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           # --- 非機密の表示設定(ここで直接編集してよい)---
-          TIME_RANGE: short_term
           TRACK_COUNT: "6"
           WIDGET_TITLE: "Spotify On Repeat"
           WIDGET_SUBTITLE: "直近4週間で最も聴いた曲 Top6"
+          # 生成・公開に失敗した場合は空になり、1位のアルバムアートへフォールバックする。
+          TOP_IMAGE_URL: ${{ steps.image-url.outputs.url }}
         run: python refresh_widget.py

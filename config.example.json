@@ -8,5 +8,6 @@
   "time_range": "short_term",
   "track_count": 6,
   "widget_title": "SpotifyRanking",
-  "widget_subtitle": ""
+  "widget_subtitle": "",
+  "top_image_url": ""
 }
